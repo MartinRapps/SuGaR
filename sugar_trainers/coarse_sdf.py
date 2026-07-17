@@ -9,6 +9,7 @@ from sugar_scene.sugar_model import SuGaR
 from sugar_scene.sugar_optimizer import OptimizationParams, SuGaROptimizer
 from sugar_scene.sugar_densifier import SuGaRDensifier
 from sugar_utils.loss_utils import ssim, l1_loss, l2_loss
+from sugar_utils.mask_utils import SemanticMaskProvider, masked_reconstruction_loss
 
 from rich.console import Console
 import time
@@ -302,6 +303,19 @@ def coarse_training_with_sdf_regularization(args):
           f'{nerfmodel.training_cameras.gs_cameras[0].image_width}'
           )
 
+    rgb_mask_provider = None
+    if getattr(args, 'masks_dir', None):
+        rgb_mask_provider = SemanticMaskProvider(
+            mask_root=args.masks_dir,
+            level=args.mask_level,
+            dilation_px=args.mask_dilation_px,
+        )
+        rgb_mask_provider.validate_cameras(nerfmodel.training_cameras.gs_cameras)
+        CONSOLE.print(
+            "Using semantic masks for RGB supervision:",
+            f"{args.mask_level} (dilation={args.mask_dilation_px}px).",
+        )
+
     # Point cloud
     if initialize_from_trained_3dgs:
         with torch.no_grad():    
@@ -532,8 +546,23 @@ def coarse_training_with_sdf_regularization(args):
                 gt_rgb = gt_image.view(-1, sugar.image_height, sugar.image_width, 3)
                 gt_rgb = gt_rgb.transpose(-1, -2).transpose(-2, -3)
                     
-                # Compute loss 
-                loss = loss_fn(pred_rgb, gt_rgb)
+                # Compute loss. Existing behaviour remains unchanged unless a
+                # masks directory was supplied to the top-level trainer.
+                if rgb_mask_provider is None:
+                    loss = loss_fn(pred_rgb, gt_rgb)
+                else:
+                    training_camera = nerfmodel.training_cameras.gs_cameras[camera_indices.item()]
+                    rgb_mask = rgb_mask_provider.for_camera(
+                        training_camera, pred_rgb.device, pred_rgb.dtype
+                    )
+                    loss = masked_reconstruction_loss(
+                        pred_rgb,
+                        gt_rgb,
+                        rgb_mask,
+                        loss_function=loss_function,
+                        dssim_factor=getattr(args, 'mask_dssim_factor', 0.2),
+                        ssim_window_size=args.mask_ssim_window,
+                    )
                         
                 if enforce_entropy_regularization and iteration > start_entropy_regularization_from and iteration < end_entropy_regularization_at:
                     if iteration == start_entropy_regularization_from + 1:

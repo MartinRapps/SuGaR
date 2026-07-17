@@ -20,10 +20,10 @@ def extract_mesh_from_coarse_sugar(args):
 
     use_train_test_split = True
     n_skip_images_for_eval_split = 8
-    low_opacity_gaussian_pruning_threshold = 0.5
+    low_opacity_gaussian_pruning_threshold = getattr(args, 'low_opacity_gaussian_threshold', 0.5)
 
     # Surface level extraction parameters
-    n_total_points = 10_000_000
+    n_total_points = getattr(args, 'surface_sample_count', 10_000_000)
     use_gaussian_depth_for_surface_levels = False  # False until now
     surface_level_triangle_scale = 2.  # 2.
     # surface_level_triangle_scale = -2 * np.log(surface_level)
@@ -40,8 +40,8 @@ def extract_mesh_from_coarse_sugar(args):
     # Mesh computation parameters
     fg_bbox_factor = 1.  # 1.
     bg_bbox_factor = 4.  # 4.
-    poisson_depth = 10  # 10 for most real scenes. 6 or 7 work well for most synthetic scenes
-    vertices_density_quantile = 0.1  # 0.1 for most real scenes. 0. works well for most synthetic scenes
+    poisson_depth = getattr(args, 'poisson_depth', 10)
+    vertices_density_quantile = getattr(args, 'vertices_density_quantile', 0.1)
     decimate_mesh = True
     clean_mesh = True
     project_mesh_on_surface_points = args.project_mesh_on_surface_points
@@ -112,6 +112,8 @@ def extract_mesh_from_coarse_sugar(args):
     CONSOLE.print("Coarse model Checkpoint path:", sugar_checkpoint_path)
     CONSOLE.print("Mesh output path:", mesh_output_dir)
     CONSOLE.print("Surface levels:", surface_levels)
+    CONSOLE.print("Surface sample count:", n_total_points)
+    CONSOLE.print("Low-opacity Gaussian threshold:", low_opacity_gaussian_pruning_threshold)
     CONSOLE.print("Decimation targets:", decimation_targets)
     CONSOLE.print("Project mesh on surface points:", project_mesh_on_surface_points)
     CONSOLE.print("Use custom bbox:", use_custom_bbox)

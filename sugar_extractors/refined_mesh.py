@@ -7,6 +7,7 @@ from pytorch3d.ops import knn_points
 from pytorch3d.io import save_obj
 from sugar_scene.gs_model import GaussianSplattingWrapper
 from sugar_scene.sugar_model import SuGaR, extract_texture_image_and_uv_from_gaussians
+from sugar_utils.mask_utils import SemanticMaskProvider
 from sugar_utils.spherical_harmonics import SH2RGB
 
 from rich.console import Console
@@ -49,8 +50,14 @@ def extract_mesh_and_texture_from_refined_sugar(args):
     mesh_save_path = os.path.join(mesh_output_dir, mesh_save_path)
     
     scene_name = source_path.split('/')[-2] if len(source_path.split('/')[-1]) == 0 else source_path.split('/')[-1]
-    sugar_mesh_path = os.path.join('./output/coarse_mesh/', scene_name, 
-                                refined_model_path.split('/')[-2].split('_normalconsistency')[0].replace('sugarfine', 'sugarmesh') + '.ply')
+    default_coarse_mesh_path = os.path.join(
+        './output/coarse_mesh/',
+        scene_name,
+        refined_model_path.split('/')[-2].split('_normalconsistency')[0].replace(
+            'sugarfine', 'sugarmesh'
+        ) + '.ply',
+    )
+    sugar_mesh_path = getattr(args, 'coarse_mesh_path', None) or default_coarse_mesh_path
     
     if args.square_size is None:
         if n_gaussians_per_surface_triangle == 1:
@@ -103,6 +110,20 @@ def extract_mesh_and_texture_from_refined_sugar(args):
     CONSOLE.print(f'{len(nerfmodel.training_cameras)} training images detected.')
     CONSOLE.print(f'The model has been trained for {iteration_to_load} steps.')
     CONSOLE.print(len(nerfmodel.gaussians._xyz) / 1e6, "M gaussians detected.")
+
+    texture_mask_provider = None
+    if getattr(args, 'masks_dir', None):
+        texture_mask_provider = SemanticMaskProvider(
+            mask_root=args.masks_dir,
+            level=getattr(args, 'texture_mask_level', getattr(args, 'mask_level', 'default')),
+            dilation_px=getattr(args, 'texture_mask_dilation_px', getattr(args, 'mask_dilation_px', 0)),
+        )
+        texture_mask_provider.validate_cameras(nerfmodel.training_cameras.gs_cameras)
+        CONSOLE.print(
+            "Using semantic masks for UV texture accumulation:",
+            f"{texture_mask_provider.level} "
+            f"(dilation={texture_mask_provider.dilation_px}px).",
+        )
     
     # --- Loading coarse mesh ---
     o3d_mesh = o3d.io.read_triangle_mesh(sugar_mesh_path)
@@ -197,7 +218,8 @@ def extract_mesh_and_texture_from_refined_sugar(args):
                 square_size=square_size,
                 n_sh=0,
                 texture_with_gaussian_renders=True,
-                bg_color=[0., 0., 0.]
+                bg_color=[0., 0., 0.],
+                mask_provider=texture_mask_provider,
             )
         else:
             verts_uv, faces_uv, texture_img = extract_texture_image_and_uv_from_gaussians(
@@ -228,6 +250,10 @@ def extract_mesh_and_texture_from_refined_sugar(args):
             faces_uvs=textured_mesh.textures.faces_uvs_list()[0],
             texture_map=textured_mesh.textures.maps_padded()[0].clamp(0., 1.),
             )
+        with open(mesh_save_path, 'rb+') as mesh_file:
+            mesh_file.seek(-1, os.SEEK_END)
+            if mesh_file.read(1) not in {b'\n', b'\r'}:
+                mesh_file.write(b'\n')
         
     CONSOLE.print("Texture saved at:", mesh_save_path)
     return mesh_save_path

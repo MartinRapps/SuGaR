@@ -9,6 +9,7 @@ from sugar_scene.sugar_model import SuGaR
 from sugar_scene.sugar_optimizer import OptimizationParams, SuGaROptimizer
 from sugar_scene.sugar_densifier import SuGaRDensifier
 from sugar_utils.loss_utils import ssim, l1_loss, l2_loss
+from sugar_utils.mask_utils import SemanticMaskProvider, masked_reconstruction_loss
 
 from rich.console import Console
 import time
@@ -61,7 +62,8 @@ def depth_normal_consistency_loss(
     normal:torch.Tensor,
     camera,
     scale_rendered_normals=False,
-    return_normal_maps=False
+    return_normal_maps=False,
+    pixel_mask=None,
 ):
     """_summary_
 
@@ -92,6 +94,22 @@ def depth_normal_consistency_loss(
     
     if return_normal_maps:
         return normal_error, normal_view, normal_from_depth    
+    if pixel_mask is not None:
+        valid_mask = pixel_mask.squeeze().to(device=normal_error.device, dtype=normal_error.dtype)
+        if valid_mask.shape != normal_error.shape:
+            raise ValueError(
+                f"Depth-normal mask shape {tuple(valid_mask.shape)} does not match "
+                f"normal map shape {tuple(normal_error.shape)}"
+            )
+        # depth2normal_2dgs leaves the one-pixel border undefined.
+        valid_mask = valid_mask.clone()
+        valid_mask[0, :] = 0
+        valid_mask[-1, :] = 0
+        valid_mask[:, 0] = 0
+        valid_mask[:, -1] = 0
+        if torch.count_nonzero(valid_mask).item() == 0:
+            raise ValueError("Depth-normal mask has no valid interior pixels")
+        return (normal_error * valid_mask).sum() / valid_mask.sum()
     return normal_error.mean()
 
 
@@ -135,7 +153,7 @@ def coarse_training_with_density_regularization_and_dn_consistency(args):
     # -----Optimization parameters-----
 
     # Learning rates and scheduling
-    num_iterations = 15_000  # Changed
+    num_iterations = getattr(args, 'coarse_iterations', None) or 15_000
 
     spatial_lr_scale = None
     position_lr_init=0.00016
@@ -311,8 +329,7 @@ def coarse_training_with_density_regularization_and_dn_consistency(args):
     # -----Log and save-----
     print_loss_every_n_iterations = 200
     save_model_every_n_iterations = 1_000_000
-    # save_milestones = [9000, 12_000, 15_000]
-    save_milestones = [15_000]
+    save_milestones = [num_iterations]
 
     # ====================End of parameters====================
 
@@ -393,6 +410,27 @@ def coarse_training_with_density_regularization_and_dn_consistency(args):
           f'{nerfmodel.training_cameras.gs_cameras[0].image_height} x '
           f'{nerfmodel.training_cameras.gs_cameras[0].image_width}'
           )
+
+    rgb_mask_provider = None
+    normal_mask_provider = None
+    if getattr(args, 'masks_dir', None):
+        rgb_mask_provider = SemanticMaskProvider(
+            mask_root=args.masks_dir,
+            level=args.mask_level,
+            dilation_px=args.mask_dilation_px,
+        )
+        rgb_mask_provider.validate_cameras(nerfmodel.training_cameras.gs_cameras)
+        normal_mask_provider = SemanticMaskProvider(
+            mask_root=args.masks_dir,
+            level=args.normal_mask_level,
+            dilation_px=0,
+        )
+        normal_mask_provider.validate_cameras(nerfmodel.training_cameras.gs_cameras)
+        CONSOLE.print(
+            "Using semantic masks for RGB and depth-normal supervision:",
+            f"RGB={args.mask_level} (dilation={args.mask_dilation_px}px), ",
+            f"DN={args.normal_mask_level}.",
+        )
 
     # Point cloud
     if initialize_from_trained_3dgs:
@@ -624,8 +662,23 @@ def coarse_training_with_density_regularization_and_dn_consistency(args):
                 gt_rgb = gt_image.view(-1, sugar.image_height, sugar.image_width, 3)
                 gt_rgb = gt_rgb.transpose(-1, -2).transpose(-2, -3)
                     
-                # Compute loss 
-                loss = loss_fn(pred_rgb, gt_rgb)
+                # Compute loss. Existing behaviour remains unchanged unless a
+                # masks directory was supplied to the top-level trainer.
+                if rgb_mask_provider is None:
+                    loss = loss_fn(pred_rgb, gt_rgb)
+                else:
+                    training_camera = nerfmodel.training_cameras.gs_cameras[camera_indices.item()]
+                    rgb_mask = rgb_mask_provider.for_camera(
+                        training_camera, pred_rgb.device, pred_rgb.dtype
+                    )
+                    loss = masked_reconstruction_loss(
+                        pred_rgb,
+                        gt_rgb,
+                        rgb_mask,
+                        loss_function=loss_function,
+                        dssim_factor=getattr(args, 'mask_dssim_factor', 0.2),
+                        ssim_window_size=args.mask_ssim_window,
+                    )
                         
                 if enforce_entropy_regularization and iteration > start_entropy_regularization_from and iteration < end_entropy_regularization_at:
                     if iteration == start_entropy_regularization_from + 1:
@@ -647,12 +700,19 @@ def coarse_training_with_density_regularization_and_dn_consistency(args):
                     if iteration == start_dn_consistency_from + 1:
                         CONSOLE.print("\n---INFO---\nStarting depth-normal consistency.")
                     depth_img, normal_img = sugar.render_depth_and_normal(camera_indices=camera_indices.item())
+                    training_camera = nerfmodel.training_cameras.gs_cameras[camera_indices.item()]
+                    dn_mask = None
+                    if normal_mask_provider is not None:
+                        dn_mask = normal_mask_provider.for_camera(
+                            training_camera, normal_img.device, normal_img.dtype
+                        )
                     normal_error = depth_normal_consistency_loss(
                         depth=depth_img[None],  # Shape is (1, height, width) 
                         normal=normal_img.permute(2, 0, 1),  # Shape is (3, height, width)
-                        camera=nerfmodel.training_cameras.gs_cameras[camera_indices.item()],
+                        camera=training_camera,
                         scale_rendered_normals=False,
                         return_normal_maps=False,
+                        pixel_mask=dn_mask,
                     )
                     loss = loss + dn_consistency_factor * normal_error
                 

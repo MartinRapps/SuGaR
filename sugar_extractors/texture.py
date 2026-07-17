@@ -14,6 +14,7 @@ def compute_textured_mesh_for_sugar_mesh(
     n_sh=0,
     texture_with_gaussian_renders=True,
     bg_color=[0., 0., 0.],
+    mask_provider=None,
 ):  
     device = sugar.device
     
@@ -107,7 +108,9 @@ def compute_textured_mesh_for_sugar_mesh(
         use_nvdiffrast=True,
     )
     
-    print(f"Processing images...")
+    print("Processing images...")
+    if mask_provider is not None:
+        print("Restricting UV color accumulation to semantic foreground masks.")
     for cam_idx in range(len(sugar.nerfmodel.training_cameras)):
         if texture_with_gaussian_renders:
             rgb_img = sugar.render_image_gaussian_rasterizer(
@@ -124,10 +127,14 @@ def compute_textured_mesh_for_sugar_mesh(
         bary_coords = fragments.bary_coords.view(1, height, width, 3)
         pix_to_face = fragments.pix_to_face.view(1, height, width)
 
-        mask = pix_to_face > -1
-        face_indices = pix_to_face[mask]
-        bary_coords = bary_coords[mask]
-        colors = rgb_img[mask]
+        raster_mask = pix_to_face > -1
+        if mask_provider is not None:
+            camera = sugar.nerfmodel.training_cameras.gs_cameras[cam_idx]
+            semantic_mask = mask_provider.for_camera(camera, rgb_img.device, rgb_img.dtype)
+            raster_mask = raster_mask & semantic_mask[:, 0].bool()
+        face_indices = pix_to_face[raster_mask]
+        bary_coords = bary_coords[raster_mask]
+        colors = rgb_img[raster_mask]
         
         face_count[face_indices] = face_count[face_indices] + 1 
         face_colors[face_indices] = face_colors[face_indices] + colors

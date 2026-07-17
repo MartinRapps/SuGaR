@@ -22,7 +22,15 @@ if __name__ == "__main__":
     parser.add_argument('-d', '--decimation_target', type=int, default=None, 
                         help='Target number of vertices to decimate the mesh to. If None, will decimate to 200_000 and 1_000_000.')
     parser.add_argument('--project_mesh_on_surface_points', type=str2bool, default=True, 
-                        help='If True, project the mesh on the surface points for better details.')
+                        help='If True, project decimated vertices to their nearest sampled surface points.')
+    parser.add_argument('--surface-sample-count', type=int, default=10_000_000,
+                        help='Total camera-derived surface samples before Poisson reconstruction.')
+    parser.add_argument('--poisson-depth', type=int, default=10,
+                        help='Poisson octree depth; higher values retain finer detail and cost more memory/time.')
+    parser.add_argument('--vertices-density-quantile', type=float, default=0.1,
+                        help='Remove mesh vertices below this Poisson-density quantile; use 0 to disable.')
+    parser.add_argument('--low-opacity-gaussian-threshold', type=float, default=0.5,
+                        help='Discard coarse Gaussians with sigmoid opacity at or below this value before surface sampling.')
     
     parser.add_argument('-o', '--mesh_output_dir',
                         type=str, default=None, 
@@ -43,6 +51,14 @@ if __name__ == "__main__":
                         help='If True, use vanilla 3DGS to extract mesh.')
     
     args = parser.parse_args()
+    if args.surface_sample_count < 1:
+        parser.error('--surface-sample-count must be a positive integer.')
+    if args.poisson_depth < 1:
+        parser.error('--poisson-depth must be a positive integer.')
+    if not 0.0 <= args.vertices_density_quantile < 1.0:
+        parser.error('--vertices-density-quantile must be in the interval [0, 1).')
+    if not 0.0 <= args.low_opacity_gaussian_threshold < 1.0:
+        parser.error('--low-opacity-gaussian-threshold must be in the interval [0, 1).')
     
     # Call function
     extract_mesh_from_coarse_sugar(args)
