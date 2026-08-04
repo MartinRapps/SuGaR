@@ -11,6 +11,39 @@ from sugar_utils.spherical_harmonics import SH2RGB
 
 from rich.console import Console
 
+
+def poisson_mesh_or_none(point_cloud, depth, label, console):
+    """Run Poisson only when a point cloud has usable oriented normals."""
+    point_count = len(point_cloud.points)
+    if point_count < 3:
+        console.print(
+            f"[WARNING] Skipping {label} Poisson reconstruction: "
+            f"only {point_count} point(s) remain."
+        )
+        return None, None
+
+    if not point_cloud.has_normals():
+        point_cloud.estimate_normals()
+    normals = np.asarray(point_cloud.normals)
+    if normals.shape != (point_count, 3) or not np.isfinite(normals).all():
+        console.print(
+            f"[WARNING] Skipping {label} Poisson reconstruction: "
+            "point cloud has no valid normals."
+        )
+        return None, None
+
+    try:
+        return o3d.geometry.TriangleMesh.create_from_point_cloud_poisson(
+            point_cloud, depth=depth
+        )
+    except RuntimeError as error:
+        console.print(
+            f"[WARNING] Skipping {label} Poisson reconstruction after Open3D "
+            f"rejected the point cloud: {error}"
+        )
+        return None, None
+
+
 def extract_mesh_from_coarse_sugar(args):
     CONSOLE = Console(width=120)
     
@@ -391,10 +424,11 @@ def extract_mesh_from_coarse_sugar(args):
                     CONSOLE.print("Finished computing points, colors and normals.")
 
                     CONSOLE.print("Now computing mesh...")
-                    o3d_fg_mesh, o3d_fg_densities = o3d.geometry.TriangleMesh.create_from_point_cloud_poisson(
-                        fg_pcd, depth=poisson_depth) #, width=0, scale=1.1, linear_fit=False)  # depth=10 should be the default value? 11 is good to (but it starts to make a big number of triangles)
+                    o3d_fg_mesh, o3d_fg_densities = poisson_mesh_or_none(
+                        fg_pcd, poisson_depth, "foreground", CONSOLE
+                    )
 
-                    if vertices_density_quantile > 0.:
+                    if vertices_density_quantile > 0. and o3d_fg_mesh is not None:
                         CONSOLE.print("Removing vertices with low densities...")
                         vertices_to_remove = o3d_fg_densities < np.quantile(o3d_fg_densities, vertices_density_quantile)
                         o3d_fg_mesh.remove_vertices_by_mask(vertices_to_remove)
@@ -419,10 +453,11 @@ def extract_mesh_from_coarse_sugar(args):
                     CONSOLE.print("Finished computing points, colors and normals.")
 
                     CONSOLE.print("Now computing mesh...")
-                    o3d_bg_mesh, o3d_bg_densities = o3d.geometry.TriangleMesh.create_from_point_cloud_poisson(
-                        bg_pcd, depth=poisson_depth) #, width=0, scale=1.1, linear_fit=False)  # depth=10 should be the default value? 11 is good to (but it starts to make a big number of triangles)
+                    o3d_bg_mesh, o3d_bg_densities = poisson_mesh_or_none(
+                        bg_pcd, poisson_depth, "background", CONSOLE
+                    )
 
-                    if vertices_density_quantile > 0.:
+                    if vertices_density_quantile > 0. and o3d_bg_mesh is not None:
                         CONSOLE.print("Removing vertices with low densities...")
                         vertices_to_remove = o3d_bg_densities < np.quantile(o3d_bg_densities, vertices_density_quantile)
                         o3d_bg_mesh.remove_vertices_by_mask(vertices_to_remove)

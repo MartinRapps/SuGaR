@@ -35,7 +35,7 @@ if __name__ == "__main__":
                         help='(Required) Type of regularization to use for coarse SuGaR. Can be "sdf", "density" or "dn_consistency". ' 
                         'We recommend using "dn_consistency" for the best mesh quality.')
     parser.add_argument('--coarse-iterations', type=int, default=None,
-                        help='Optional coarse iterations for dn_consistency; defaults to the local 15,000-iteration profile.')
+                        help='Optional final coarse counter for dn_consistency; c9000 is the segmented-object default, values above 9000 additionally activate DN/SDF terms.')
     
     # Extract mesh
     parser.add_argument('-l', '--surface_level', type=float, default=0.3, 
@@ -156,8 +156,8 @@ if __name__ == "__main__":
     # Parse arguments
     args = parser.parse_args()
     if args.coarse_iterations is not None:
-        if args.coarse_iterations <= 9_000:
-            parser.error('--coarse-iterations must exceed 9000 because dn_consistency starts afterward.')
+        if args.coarse_iterations <= 6_999:
+            parser.error('--coarse-iterations must exceed the loaded STS counter 6999.')
         if args.regularization_type != 'dn_consistency':
             parser.error('--coarse-iterations is currently supported only with dn_consistency.')
     if args.surface_sample_count < 1:
@@ -306,4 +306,3 @@ if __name__ == "__main__":
             'texture_mask_dilation_px': args.texture_mask_dilation_px,
         })
         refined_mesh_path = extract_mesh_and_texture_from_refined_sugar(refined_mesh_args)
-        
