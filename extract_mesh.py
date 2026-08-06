@@ -31,6 +31,10 @@ if __name__ == "__main__":
                         help='Remove mesh vertices below this Poisson-density quantile; use 0 to disable.')
     parser.add_argument('--low-opacity-gaussian-threshold', type=float, default=0.5,
                         help='Discard coarse Gaussians with sigmoid opacity at or below this value before surface sampling.')
+    parser.add_argument('--surface-sample-seed', type=int, default=None,
+                        help='Optional seed for reproducible camera-based surface sampling.')
+    parser.add_argument('--include-background-mesh', type=str2bool, default=True,
+                        help='Include the separately reconstructed background mesh in the exported mesh.')
     parser.add_argument('--use-gaussian-depth', type=str2bool, default=False,
                         help='Use the Gaussian rasterizer depth directly instead of the projected diamond-mesh z-buffer.')
     
@@ -61,6 +65,8 @@ if __name__ == "__main__":
         parser.error('--vertices-density-quantile must be in the interval [0, 1).')
     if not 0.0 <= args.low_opacity_gaussian_threshold < 1.0:
         parser.error('--low-opacity-gaussian-threshold must be in the interval [0, 1).')
+    if args.surface_sample_seed is not None and args.surface_sample_seed < 0:
+        parser.error('--surface-sample-seed must be non-negative.')
     
     # Call function
     extract_mesh_from_coarse_sugar(args)

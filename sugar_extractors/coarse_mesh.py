@@ -57,6 +57,8 @@ def extract_mesh_from_coarse_sugar(args):
 
     # Surface level extraction parameters
     n_total_points = getattr(args, 'surface_sample_count', 10_000_000)
+    surface_sample_seed = getattr(args, 'surface_sample_seed', None)
+    include_background_mesh = getattr(args, 'include_background_mesh', True)
     # The official route derives the z-buffer from the projected Gaussian
     # diamond mesh. A diagnostic can instead use the Gaussian rasterizer's
     # depth directly; this keeps the two surface-sampling hypotheses separate.
@@ -149,6 +151,8 @@ def extract_mesh_from_coarse_sugar(args):
     CONSOLE.print("Mesh output path:", mesh_output_dir)
     CONSOLE.print("Surface levels:", surface_levels)
     CONSOLE.print("Surface sample count:", n_total_points)
+    CONSOLE.print("Surface sample seed:", surface_sample_seed if surface_sample_seed is not None else "None")
+    CONSOLE.print("Include background mesh:", include_background_mesh)
     CONSOLE.print("Low-opacity Gaussian threshold:", low_opacity_gaussian_pruning_threshold)
     CONSOLE.print("Decimation targets:", decimation_targets)
     CONSOLE.print("Project mesh on surface points:", project_mesh_on_surface_points)
@@ -220,6 +224,11 @@ def extract_mesh_from_coarse_sugar(args):
             )
         sugar.load_state_dict(checkpoint['state_dict'])
     sugar.eval()
+
+    surface_sample_generator = None
+    if surface_sample_seed is not None:
+        surface_sample_generator = torch.Generator(device=sugar.device)
+        surface_sample_generator.manual_seed(surface_sample_seed)
     
     CONSOLE.print("Coarse model loaded.")
     CONSOLE.print("Coarse model parameters:")
@@ -325,7 +334,8 @@ def extract_mesh_from_coarse_sugar(args):
                                 return_gaussian_idx=True,
                                 return_normals=True,
                                 compute_flat_normals=flat_surface_level_normals,
-                                use_gaussian_depth=use_gaussian_depth_for_surface_levels,)
+                                use_gaussian_depth=use_gaussian_depth_for_surface_levels,
+                                sampling_generator=surface_sample_generator,)
                         else:
                             frame_surface_level_outputs = sugar.compute_level_surface_points_from_camera_efficient(
                                 cam_idx=cam_idx,
@@ -359,7 +369,11 @@ def extract_mesh_from_coarse_sugar(args):
                             img_surface_view_directions = torch.nn.functional.normalize(cameras_to_use.p3d_cameras[cam_idx].get_camera_center() - img_surface_points)
                             img_surface_pix_to_gaussians = surface_gaussian_idx.view(-1)
                             
-                            idx = torch.randperm(len(img_surface_points), device=sugar.device)[:n_pts_per_frame]
+                            idx = torch.randperm(
+                                len(img_surface_points),
+                                device=sugar.device,
+                                generator=surface_sample_generator,
+                            )[:n_pts_per_frame]
                             
                             surface_levels_outputs[surface_level]['points'] = torch.cat([surface_levels_outputs[surface_level]['points'], img_surface_points[idx]], dim=0)
                             surface_levels_outputs[surface_level]['colors'] = torch.cat([surface_levels_outputs[surface_level]['colors'], img_surface_colors[idx]], dim=0)
@@ -441,7 +455,10 @@ def extract_mesh_from_coarse_sugar(args):
                 
                 # ---Compute background mesh---
                 CONSOLE.print("\n-----Background mesh-----")
-                if bg_points.shape[0] > 0:
+                if not include_background_mesh:
+                    CONSOLE.print("[INFO] Background mesh disabled.")
+                    o3d_bg_mesh = None
+                elif bg_points.shape[0] > 0:
                     CONSOLE.print("Computing points, colors and normals...")
                     bg_pcd = o3d.geometry.PointCloud()
                     bg_pcd.points = o3d.utility.Vector3dVector(bg_points.double().cpu().numpy())

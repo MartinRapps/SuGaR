@@ -1903,6 +1903,7 @@ class SuGaR(nn.Module):
         compute_intersection_for_flat_gaussian=False,  # Should be False
         use_gaussian_depth=False,  # False until now. TODO: Test with True
         just_use_depth_as_level=False, # Should be False
+        sampling_generator=None,
         ):
         # Remember to reset neighbors and update texture features before calling this function
         if nerf_cameras is None:
@@ -1994,7 +1995,14 @@ class SuGaR(nn.Module):
             ndc_points_idx = torch.arange(n_surface_points)
         else:
             n_surface_points = min(n_surface_points, ndc_points.shape[1])
-            ndc_points_idx = torch.randperm(ndc_points.shape[1])[:n_surface_points]
+            if sampling_generator is None:
+                ndc_points_idx = torch.randperm(ndc_points.shape[1])[:n_surface_points]
+            else:
+                ndc_points_idx = torch.randperm(
+                    ndc_points.shape[1],
+                    device=self.device,
+                    generator=sampling_generator,
+                )[:n_surface_points]
             ndc_points = ndc_points[:, ndc_points_idx]
         all_world_points = fov_cameras.unproject_points(ndc_points, scaled_depth_input=False).view(-1, 3)
         
