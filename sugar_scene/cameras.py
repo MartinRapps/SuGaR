@@ -438,6 +438,9 @@ class CamerasWrapper:
             camera_type (_type_): _description_
         """
 
+        if not gs_cameras:
+            raise ValueError("CamerasWrapper requires at least one camera")
+
         self.gs_cameras = gs_cameras
         
         self._p3d_cameras = p3d_cameras

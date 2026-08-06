@@ -1,6 +1,7 @@
 import sys
 sys.path.append('./gaussian_splatting')
 import os
+import re
 import torch
 import plotly.graph_objs as go
 from gaussian_splatting.scene.gaussian_model import GaussianModel
@@ -66,6 +67,31 @@ class OptimizationParams():
         self.densify_from_iter = 500
         self.densify_until_iter = 15_000
         self.densify_grad_threshold = 0.0002
+
+
+def _normalize_frame_stem(name):
+    return os.path.splitext(os.path.basename(str(name).strip()))[0]
+
+
+def _trailing_frame_id(name):
+    match = re.search(r"(\d+)$", _normalize_frame_stem(name))
+    return int(match.group(1)) if match else None
+
+
+def _resolve_fixed_eval_camera_names(camera_names, eval_names):
+    normalized_camera_names = {_normalize_frame_stem(name) for name in camera_names}
+    exact_matches = normalized_camera_names.intersection(eval_names)
+    if exact_matches:
+        return exact_matches, "normalized basename/stem"
+
+    eval_frame_ids = {
+        frame_id for name in eval_names if (frame_id := _trailing_frame_id(name)) is not None
+    }
+    numeric_matches = {
+        name for name in normalized_camera_names
+        if (frame_id := _trailing_frame_id(name)) is not None and frame_id in eval_frame_ids
+    }
+    return numeric_matches, "trailing numeric frame id"
 
 
 class GaussianSplattingWrapper:
@@ -137,14 +163,59 @@ class GaussianSplattingWrapper:
             remove_indices=remove_camera_indices,
             )
         
+        fixed_eval_path = os.environ.get("SUGAR_EVAL_FRAMES_PATH") or os.environ.get("EVAL_FRAMES_PATH")
+        fixed_eval_names = set()
+        if fixed_eval_path:
+            if not os.path.isfile(fixed_eval_path):
+                raise FileNotFoundError(
+                    f"Fixed evaluation split does not exist: {fixed_eval_path}"
+                )
+            with open(fixed_eval_path, encoding="utf-8") as handle:
+                fixed_eval_names = {
+                    _normalize_frame_stem(line)
+                    for line in handle
+                    if line.strip()
+                }
+            if not fixed_eval_names:
+                raise ValueError(f"Fixed evaluation split is empty: {fixed_eval_path}")
+
+        fixed_eval_camera_names = set()
+        fixed_eval_match_mode = "not used"
+        if fixed_eval_names:
+            fixed_eval_camera_names, fixed_eval_match_mode = _resolve_fixed_eval_camera_names(
+                [cam.image_name for cam in cam_list], fixed_eval_names
+            )
+            print(
+                "SuGaR fixed evaluation split: "
+                f"{len(fixed_eval_names)} entries, {len(cam_list)} cameras, "
+                f"{len(fixed_eval_camera_names)} matched "
+                f"({fixed_eval_match_mode}) from {fixed_eval_path}"
+            )
+
         if eval_split:
             self.cam_list = []
             self.test_cam_list = []
             for i, cam in enumerate(cam_list):
-                if i % eval_split_interval == 0:
+                if fixed_eval_names:
+                    is_test = _normalize_frame_stem(cam.image_name) in fixed_eval_camera_names
+                else:
+                    is_test = i % eval_split_interval == 0
+                if is_test:
                     self.test_cam_list.append(cam)
                 else:
                     self.cam_list.append(cam)
+            if fixed_eval_names and not self.test_cam_list:
+                available_names = [cam.image_name for cam in cam_list[:5]]
+                raise ValueError(
+                    "The fixed evaluation split did not match any SuGaR camera "
+                    f"name. Expected stems such as {available_names}; "
+                    f"check {fixed_eval_path}."
+                )
+            if fixed_eval_names and not self.cam_list:
+                raise ValueError(
+                    "The fixed evaluation split contains every available SuGaR "
+                    f"camera, leaving no training cameras: {fixed_eval_path}."
+                )
             # test_ns_cameras = convert_camera_from_gs_to_nerfstudio(self.test_cam_list)
             # self.test_cameras = NeRFCameras.from_ns_cameras(test_ns_cameras)
             self.test_cameras = CamerasWrapper(self.test_cam_list)

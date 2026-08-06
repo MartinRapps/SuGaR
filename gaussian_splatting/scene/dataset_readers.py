@@ -10,6 +10,7 @@
 #
 
 import os
+import re
 import sys
 from PIL import Image
 from typing import NamedTuple
@@ -22,6 +23,31 @@ from pathlib import Path
 from plyfile import PlyData, PlyElement
 from utils.sh_utils import SH2RGB
 from scene.gaussian_model import BasicPointCloud
+
+
+def _normalize_frame_stem(name):
+    return os.path.splitext(os.path.basename(str(name).strip()))[0]
+
+
+def _trailing_frame_id(name):
+    match = re.search(r"(\d+)$", _normalize_frame_stem(name))
+    return int(match.group(1)) if match else None
+
+
+def _resolve_fixed_eval_camera_names(camera_names, eval_names):
+    normalized_camera_names = {_normalize_frame_stem(name) for name in camera_names}
+    exact_matches = normalized_camera_names.intersection(eval_names)
+    if exact_matches:
+        return exact_matches, "normalized basename/stem"
+
+    eval_frame_ids = {
+        frame_id for name in eval_names if (frame_id := _trailing_frame_id(name)) is not None
+    }
+    numeric_matches = {
+        name for name in normalized_camera_names
+        if (frame_id := _trailing_frame_id(name)) is not None and frame_id in eval_frame_ids
+    }
+    return numeric_matches, "trailing numeric frame id"
 
 class CameraInfo(NamedTuple):
     uid: int
@@ -145,7 +171,50 @@ def readColmapSceneInfo(path, images, eval, llffhold=8):
     cam_infos_unsorted = readColmapCameras(cam_extrinsics=cam_extrinsics, cam_intrinsics=cam_intrinsics, images_folder=os.path.join(path, reading_dir))
     cam_infos = sorted(cam_infos_unsorted.copy(), key = lambda x : x.image_name)
 
-    if eval:
+    fixed_eval_path = os.environ.get("SUGAR_EVAL_FRAMES_PATH") or os.environ.get("EVAL_FRAMES_PATH")
+    fixed_eval_names = set()
+    if fixed_eval_path:
+        if not os.path.isfile(fixed_eval_path):
+            raise FileNotFoundError(
+                f"Fixed evaluation split does not exist: {fixed_eval_path}"
+            )
+        with open(fixed_eval_path, encoding="utf-8") as handle:
+            fixed_eval_names = {
+                _normalize_frame_stem(line)
+                for line in handle
+                if line.strip()
+            }
+        if not fixed_eval_names:
+            raise ValueError(f"Fixed evaluation split is empty: {fixed_eval_path}")
+
+    if eval and fixed_eval_names:
+        fixed_eval_camera_names, match_mode = _resolve_fixed_eval_camera_names(
+            [camera.image_name for camera in cam_infos], fixed_eval_names
+        )
+        print(
+            "Fixed evaluation split: "
+            f"{len(fixed_eval_names)} entries, {len(cam_infos)} cameras, "
+            f"{len(fixed_eval_camera_names)} matched ({match_mode}) "
+            f"from {fixed_eval_path}"
+        )
+        train_cam_infos = [
+            c for c in cam_infos if _normalize_frame_stem(c.image_name) not in fixed_eval_camera_names
+        ]
+        test_cam_infos = [
+            c for c in cam_infos if _normalize_frame_stem(c.image_name) in fixed_eval_camera_names
+        ]
+        if not test_cam_infos:
+            available_names = [camera.image_name for camera in cam_infos[:5]]
+            raise ValueError(
+                "The fixed evaluation split did not match any Gaussian camera "
+                f"name. Expected stems such as {available_names}; check {fixed_eval_path}."
+            )
+        if not train_cam_infos:
+            raise ValueError(
+                "The fixed evaluation split contains every Gaussian camera, "
+                f"leaving no training cameras: {fixed_eval_path}."
+            )
+    elif eval:
         train_cam_infos = [c for idx, c in enumerate(cam_infos) if idx % llffhold != 0]
         test_cam_infos = [c for idx, c in enumerate(cam_infos) if idx % llffhold == 0]
     else:
