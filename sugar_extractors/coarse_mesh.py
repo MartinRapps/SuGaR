@@ -57,7 +57,10 @@ def extract_mesh_from_coarse_sugar(args):
 
     # Surface level extraction parameters
     n_total_points = getattr(args, 'surface_sample_count', 10_000_000)
-    use_gaussian_depth_for_surface_levels = False  # False until now
+    # The official route derives the z-buffer from the projected Gaussian
+    # diamond mesh. A diagnostic can instead use the Gaussian rasterizer's
+    # depth directly; this keeps the two surface-sampling hypotheses separate.
+    use_gaussian_depth_for_surface_levels = getattr(args, 'use_gaussian_depth', False)
     surface_level_triangle_scale = 2.  # 2.
     # surface_level_triangle_scale = -2 * np.log(surface_level)
     surface_level_primitive_types = 'diamond'  # 'diamond'

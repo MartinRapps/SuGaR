@@ -31,6 +31,8 @@ if __name__ == "__main__":
                         help='Remove mesh vertices below this Poisson-density quantile; use 0 to disable.')
     parser.add_argument('--low-opacity-gaussian-threshold', type=float, default=0.5,
                         help='Discard coarse Gaussians with sigmoid opacity at or below this value before surface sampling.')
+    parser.add_argument('--use-gaussian-depth', type=str2bool, default=False,
+                        help='Use the Gaussian rasterizer depth directly instead of the projected diamond-mesh z-buffer.')
     
     parser.add_argument('-o', '--mesh_output_dir',
                         type=str, default=None, 
