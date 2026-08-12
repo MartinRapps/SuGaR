@@ -191,6 +191,13 @@ class GaussianSplattingWrapper:
                 f"{len(fixed_eval_camera_names)} matched "
                 f"({fixed_eval_match_mode}) from {fixed_eval_path}"
             )
+            if len(fixed_eval_camera_names) != len(fixed_eval_names):
+                raise ValueError(
+                    "The fixed evaluation split contains cameras that are not "
+                    "available after SuGaR camera filtering: "
+                    f"{len(fixed_eval_names) - len(fixed_eval_camera_names)} "
+                    f"unmatched of {len(fixed_eval_names)}. Check {fixed_eval_path}."
+                )
 
         if eval_split:
             self.cam_list = []

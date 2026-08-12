@@ -197,6 +197,13 @@ def readColmapSceneInfo(path, images, eval, llffhold=8):
             f"{len(fixed_eval_camera_names)} matched ({match_mode}) "
             f"from {fixed_eval_path}"
         )
+        if len(fixed_eval_camera_names) != len(fixed_eval_names):
+            raise ValueError(
+                "The fixed evaluation split contains images that are not "
+                "available in the COLMAP camera set: "
+                f"{len(fixed_eval_names) - len(fixed_eval_camera_names)} "
+                f"unmatched of {len(fixed_eval_names)}. Check {fixed_eval_path}."
+            )
         train_cam_infos = [
             c for c in cam_infos if _normalize_frame_stem(c.image_name) not in fixed_eval_camera_names
         ]
